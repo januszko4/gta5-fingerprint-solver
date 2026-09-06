@@ -1,41 +1,82 @@
-# Source - https://stackoverflow.com/a/15147009
-# Posted by Moshe, modified by community. See post 'Timeline' for change history
-# Retrieved 2026-09-06, License - CC BY-SA 4.0
-
 import cv2
 
 method = cv2.TM_SQDIFF_NORMED
 
-# Read the images from the file
-large_image = cv2.imread('x/fingerprint1.png')
+# Load big image
+original = cv2.imread("x/fingerprint1.png")
 
-height, width = large_image.shape[:2]
-large_image = large_image[:, :width // 2]
+# Keep only left half
+height, width = original.shape[:2]
+original = original[:, :width // 2]
+
+# Copy used for drawing
+display = original.copy()
 
 cv2.namedWindow("output", cv2.WINDOW_NORMAL)
-# cv2.resizeWindow("output", 1280, 720)
 
-for i in range(1,5):
-    result = cv2.matchTemplate(large_image, small_image, method)
-    small_image = cv2.imread(f"x/fingerprint1_{str(i)}.png")
+for i in range(1, 5):
 
-    # We want the minimum squared difference
-    mn,_,mnLoc,_ = cv2.minMaxLoc(result)
+    small_image = cv2.imread(f"x/fingerprint1_{i}.png")
 
-    # Draw the rectangle:
-    # Extract the coordinates of our best match
-    MPx,MPy = mnLoc
+    best_score = float("inf")
+    best_location = None
+    best_template = None
 
-    # Step 2: Get the size of the template. This is the same size as the match.
-    trows,tcols = small_image.shape[:2]
+    # Try different sizes
+    for scale in [1]:
 
-    # Step 3: Draw the rectangle on large_image
-    cv2.rectangle(large_image, (MPx,MPy),(MPx+tcols,MPy+trows),(0,0,255),2)
+        resized = cv2.resize(
+            small_image,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=cv2.INTER_AREA
+        )
 
-    # Display the original image with the rectangle around the match.
-    cv2.imshow('output',large_image)
+        # Skip if template is bigger than screenshot
+        if (resized.shape[0] > original.shape[0] or
+                resized.shape[1] > original.shape[1]):
+            continue
 
-# The image is only displayed if we call this
+        result = cv2.matchTemplate(
+            original,
+            resized,
+            method
+        )
 
+        mn, _, mnLoc, _ = cv2.minMaxLoc(result)
+
+        # SQDIFF: lower is better
+        if mn < best_score:
+            best_score = mn
+            best_location = mnLoc
+            best_template = resized
+
+    # Best match position
+    MPx, MPy = best_location
+
+    # Actual size of the scaled template
+    trows, tcols = best_template.shape[:2]
+
+    confidence = 1 - best_score
+
+    print(
+        f"Fingerprint {i}: "
+        f"Position: ({MPx}, {MPy}) "
+        f"Confidence: {confidence:.4f} "
+        f"Size: {tcols}x{trows}"
+    )
+
+    # Draw rectangle around best match
+    cv2.rectangle(
+        display,
+        (MPx, MPy),
+        (MPx + tcols, MPy + trows),
+        (0, 0, 255),
+        2
+    )
+
+cv2.imshow("output", display)
 
 cv2.waitKey(0)
+cv2.destroyAllWindows()
