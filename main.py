@@ -1,82 +1,70 @@
 import cv2
+import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 
-method = cv2.TM_SQDIFF_NORMED
+def best_match_at_scales(original_gray, template_gray, scales):
+    best = (float("inf"), None, None, None)  # score, loc, (w,h), scale
+    for scale in scales:
+        resized = cv2.resize(template_gray, None, fx=scale, fy=scale,
+                              interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR)
+        th, tw = resized.shape[:2]
+        if th < 5 or tw < 5 or th > original_gray.shape[0] or tw > original_gray.shape[1]:
+            continue
+        result = cv2.matchTemplate(original_gray, resized, cv2.TM_SQDIFF_NORMED)
+        mn, _, mnLoc, _ = cv2.minMaxLoc(result)
+        if mn < best[0]:
+            best = (mn, mnLoc, (tw, th), scale)
+    return best
 
-# Load big image
-original = cv2.imread("x/fingerprint1.png")
-
-# Keep only left half
+original = cv2.imread("x/fingerprint1_test.png")
 height, width = original.shape[:2]
 original = original[:, :width // 2]
-
-# Copy used for drawing
+original_gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
 display = original.copy()
 
 cv2.namedWindow("output", cv2.WINDOW_NORMAL)
 
+templates_gray = {}
 for i in range(1, 5):
+    small = cv2.imread(f"x/fingerprint1_{i}.png")
+    if small is None:
+        print(f"Fingerprint {i}: file missing")
+        continue
+    templates_gray[i] = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
-    small_image = cv2.imread(f"x/fingerprint1_{i}.png")
+# --- Step 1: calibrate scale once, using the first available template ---
+calib_i = next(iter(templates_gray))
+coarse_scales = np.linspace(0.3, 1.5, 13)
+score, loc, size, scale = best_match_at_scales(original_gray, templates_gray[calib_i], coarse_scales)
 
-    best_score = float("inf")
-    best_location = None
-    best_template = None
+fine_scales = np.linspace(max(0.05, scale - 0.08), scale + 0.08, 9)
+score, loc, size, scale = best_match_at_scales(original_gray, templates_gray[calib_i], fine_scales)
 
-    # Try different sizes
-    for scale in [1]:
+print(f"Calibrated scale: {scale:.4f} (from fingerprint {calib_i}, confidence {1-score:.4f})")
 
-        resized = cv2.resize(
-            small_image,
-            None,
-            fx=scale,
-            fy=scale,
-            interpolation=cv2.INTER_AREA
-        )
+# --- Step 2: reuse that scale for every template, fast single match each ---
+def process(i):
+    template_gray = templates_gray[i]
+    resized = cv2.resize(template_gray, None, fx=scale, fy=scale,
+                          interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR)
+    th, tw = resized.shape[:2]
+    if th > original_gray.shape[0] or tw > original_gray.shape[1]:
+        return None
+    result = cv2.matchTemplate(original_gray, resized, cv2.TM_SQDIFF_NORMED)
+    mn, _, mnLoc, _ = cv2.minMaxLoc(result)
+    return i, mn, mnLoc, (tw, th)
 
-        # Skip if template is bigger than screenshot
-        if (resized.shape[0] > original.shape[0] or
-                resized.shape[1] > original.shape[1]):
-            continue
+with ThreadPoolExecutor(max_workers=4) as ex:
+    results = list(ex.map(process, [i for i in templates_gray]))
 
-        result = cv2.matchTemplate(
-            original,
-            resized,
-            method
-        )
-
-        mn, _, mnLoc, _ = cv2.minMaxLoc(result)
-
-        # SQDIFF: lower is better
-        if mn < best_score:
-            best_score = mn
-            best_location = mnLoc
-            best_template = resized
-
-    # Best match position
-    MPx, MPy = best_location
-
-    # Actual size of the scaled template
-    trows, tcols = best_template.shape[:2]
-
-    confidence = 1 - best_score
-
-    print(
-        f"Fingerprint {i}: "
-        f"Position: ({MPx}, {MPy}) "
-        f"Confidence: {confidence:.4f} "
-        f"Size: {tcols}x{trows}"
-    )
-
-    # Draw rectangle around best match
-    cv2.rectangle(
-        display,
-        (MPx, MPy),
-        (MPx + tcols, MPy + trows),
-        (0, 0, 255),
-        2
-    )
+for r in results:
+    if r is None:
+        continue
+    i, score, (MPx, MPy), (tw, th) = r
+    confidence = 1 - score
+    print(f"Fingerprint {i}: Position: ({MPx}, {MPy}) Confidence: {confidence:.4f} Size: {tw}x{th}")
+    cv2.rectangle(display, (MPx, MPy), (MPx + tw, MPy + th), (0, 0, 255), 2)
 
 cv2.imshow("output", display)
-
 cv2.waitKey(0)
 cv2.destroyAllWindows()
