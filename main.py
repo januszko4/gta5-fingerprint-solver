@@ -1,6 +1,31 @@
 import cv2
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
+import pyautogui
+from screeninfo import get_monitors
+
+
+def choose_monitor():
+    monitors = get_monitors()
+    print("Available monitors:")
+    for idx, m in enumerate(monitors):
+        print(f"  [{idx}] {m.width}x{m.height} at ({m.x}, {m.y})"
+              f"{' (primary)' if m.is_primary else ''}")
+
+    while True:
+        choice = input(f"Select monitor [0-{len(monitors)-1}]: ").strip()
+        if choice.isdigit() and 0 <= int(choice) < len(monitors):
+            return monitors[int(choice)]
+        print("Invalid choice, try again.")
+
+
+def capture_monitor(monitor):
+    region = (monitor.x, monitor.y, monitor.width, monitor.height)
+    screenshot = pyautogui.screenshot(region=region)
+    # PIL image (RGB) -> OpenCV image (BGR)
+    frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+    return frame
+
 
 def best_match_at_scales(original_gray, template_gray, scales):
     best = (float("inf"), None, None, None)  # score, loc, (w,h), scale
@@ -16,7 +41,10 @@ def best_match_at_scales(original_gray, template_gray, scales):
             best = (mn, mnLoc, (tw, th), scale)
     return best
 
-original = cv2.imread("x/fingerprint1_test.png")
+
+monitor = choose_monitor()
+original = capture_monitor(monitor)
+
 height, width = original.shape[:2]
 original = original[:, :width // 2]
 original_gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
@@ -53,6 +81,7 @@ def process(i):
     result = cv2.matchTemplate(original_gray, resized, cv2.TM_SQDIFF_NORMED)
     mn, _, mnLoc, _ = cv2.minMaxLoc(result)
     return i, mn, mnLoc, (tw, th)
+
 
 with ThreadPoolExecutor(max_workers=4) as ex:
     results = list(ex.map(process, [i for i in templates_gray]))
